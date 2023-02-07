@@ -26,20 +26,9 @@ import time
 # None means this probe can't decide
 # (and throw an exception if things are really wrong)
 
-
-def lines(stdout):
-    return stdout.strip().split("\n")
-
-
-@functools.cache  # aka memoize
-def get_cpu_count():
-    # https://unix.stackexchange.com/questions/218074/how-to-know-number-of-cores-of-a-system-in-linux
-    r = subprocess.run(
-        ["nproc", "--all"], capture_output=True, encoding="utf8", check=True
-    )
-    dat = lines(r.stdout)
-    assert len(dat) == 1
-    return int(dat[0])
+##
+##  probes
+##
 
 
 def systemd_wake():
@@ -115,18 +104,57 @@ def proc_loadavg():
             f"system load: {current_load} cpu count:{cpu_count} (threshold:{half_cpu_count})"
         )
 
-        # heuristic: load is less than half current cpu/core count
+        # heuristic: load is less than half cpu/core count
         return current_load < half_cpu_count
 
 
 def idle_terminal():
-    # TODO
-    pass
+    # who -u -H
+    r = subprocess.run(["who", "-u"], capture_output=True, encoding="utf8", check=True)
+
+    def parse(s):
+        "return number of minutes of inactivity from string value"
+        if s == ".":
+            return 0
+
+        if ":" not in s:
+            return None
+
+        tmp = s.split(":")
+        assert len(tmp) == 2
+        return int(tmp[0]) * 60 + int(tmp[1])
+
+    idle_times = []
+    for line in lines(r.stdout):
+        # greg     pts/2        2023-02-06 15:17   .         59698 (:0)
+        # greg     pts/3        2023-02-06 15:56 20:13       65114 (:0)
+        fields = line.split()
+        idle_times.append(fields[4])
+
+    # i am the walrus koo koo cachoo
+    tmp = [val for x in idle_times if (val := parse(x)) is not None]
+
+    idle_minutes = min(tmp)
+    print(f"terminal idle for {idle_minutes} min")
+
+    # heuristic: terminal session has been idle for at least 5 minutes
+    # XXX: probably want to make this longer
+    return idle_minutes >= 5
 
 
-def idle_x11():
-    # TODO
-    pass
+def xprintidle():
+    # https://github.com/g0hl1n/xprintidle
+    r = subprocess.run(["xprintidle"], capture_output=True, encoding="utf8", check=True)
+
+    dat = lines(r.stdout)
+    assert len(dat) == 1
+    idle_ms = int(dat[0])
+
+    print(f"X11 idle for {idle_ms/1000} seconds")
+
+    # heuristic: x11 session has been idle for 5 minutes
+    # XXX probably want to make this longer?
+    return idle_ms >= 5 * 60 * 1000
 
 
 def idle_wayland():
@@ -139,11 +167,53 @@ def idle_osx():
     pass
 
 
+##
+##  probe helper functions
+##
+
+
+def lines(stdout):
+    "split process output into a list of lines"
+    return stdout.strip().split("\n")
+
+
+@functools.cache  # aka memoize
+def get_cpu_count():
+    "returns number of cpu cores on this system"
+    # https://unix.stackexchange.com/questions/218074/how-to-know-number-of-cores-of-a-system-in-linux
+    r = subprocess.run(
+        ["nproc", "--all"], capture_output=True, encoding="utf8", check=True
+    )
+    dat = lines(r.stdout)
+    assert len(dat) == 1
+    return int(dat[0])
+
+
+@functools.cache
+def which(binary_name):
+    "return the full path of binary_name, or None if it is not present"
+    r = subprocess.run(["which", binary_name], capture_output=True, encoding="utf8")
+    if r.returncode != 0:
+        return None
+
+    dat = lines(r.stdout)
+    assert len(dat) == 1
+    return dat[0]
+
+
 def init_probes():
     "select probes that make sense for this system"
     # TODO: platform, laptop vs. desktop, etc
-    # return [systemd_wake, proc_uptime, proc_loadavg, idle_terminal, idle_x11]
-    return [systemd_wake, proc_uptime, proc_loadavg]
+    probes = [systemd_wake, proc_uptime, proc_loadavg, idle_terminal]
+
+    # XXX should also probe that the system uses X11
+    # XXX doesn't make sense to also use idle_terminal if xprintidle works
+    xprintidle_path = which("xprintidle")
+    if xprintidle_path:
+        print(f"found {xprintidle_path}")
+        probes.append(xprintidle)
+
+    return probes
 
 
 def test(probes, verbose=False):
@@ -160,13 +230,14 @@ def test(probes, verbose=False):
             results.append(r)
 
         final = all(x != False for x in results)
-        print(f"final result: {final} (from {len(results)} probes)")
+        print(f"final result: {final} (from {len(results)} probes)\n")
 
         time.sleep(60)
 
 
 def main():
     all_probes = init_probes()
+    print(f"using probes: {all_probes}\n")
 
     # this should be a flag, normal mode of operation should
     # be to wait until all idle probes return true and then
