@@ -18,6 +18,7 @@
 import datetime
 import functools
 import subprocess
+import sys
 import time
 
 # probes should be trinary?
@@ -58,7 +59,7 @@ def systemd_wake():
     dt = dt.replace(year=now.year)  # XXX
 
     ago = now - dt
-    print(f"last wake was {ago} ago (at {dt})")
+    verbose(f"last wake was {ago} ago (at {dt})")
 
     # heuristic: 10 minutes since last wake
     return ago.total_seconds() >= 60 * 10
@@ -75,7 +76,7 @@ def proc_uptime():
         total_seconds = float(line.split()[0])
         total_minutes = int(total_seconds / 60)
 
-        print(f"system uptime is {total_minutes} minutes ({total_seconds} sec)")
+        verbose(f"system uptime is {total_minutes} minutes ({total_seconds} sec)")
 
         # heuristic: 10 minutes since last reboot
         return total_minutes > 10
@@ -100,7 +101,7 @@ def proc_loadavg():
         # executing_count = int(tmp[0])
 
         half_cpu_count = int(cpu_count / 2)
-        print(
+        verbose(
             f"system load: {current_load} cpu count:{cpu_count} (threshold:{half_cpu_count})"
         )
 
@@ -135,7 +136,7 @@ def idle_terminal():
     tmp = [val for x in idle_times if (val := parse(x)) is not None]
 
     idle_minutes = min(tmp)
-    print(f"terminal idle for {idle_minutes} min")
+    verbose(f"terminal idle for {idle_minutes} min")
 
     # heuristic: terminal session has been idle for at least 5 minutes
     # XXX: probably want to make this longer
@@ -150,7 +151,7 @@ def xprintidle():
     assert len(dat) == 1
     idle_ms = int(dat[0])
 
-    print(f"X11 idle for {idle_ms/1000} seconds")
+    verbose(f"X11 idle for {idle_ms/1000} seconds")
 
     # heuristic: x11 session has been idle for 5 minutes
     # XXX probably want to make this longer?
@@ -170,6 +171,11 @@ def idle_osx():
 ##
 ##  probe helper functions
 ##
+
+
+def verbose(*args, **kwargs):
+    if VERBOSE:
+        print(*args, **kwargs)
 
 
 def lines(stdout):
@@ -210,13 +216,13 @@ def init_probes():
     # XXX doesn't make sense to also use idle_terminal if xprintidle works
     xprintidle_path = which("xprintidle")
     if xprintidle_path:
-        print(f"found {xprintidle_path}")
+        verbose(f"found {xprintidle_path}")
         probes.append(xprintidle)
 
     return probes
 
 
-def test(probes, verbose=False):
+def test(probes):
     "run continuously and print idle status to terminal"
     while True:
         now = datetime.datetime.now()
@@ -235,15 +241,78 @@ def test(probes, verbose=False):
         time.sleep(60)
 
 
-def main():
+def run_command(cmdline):
+    r = subprocess.run(cmdline)  # don't capture output
+    if r.returncode != 0:
+        print(f"process exited with {r.returncode}")
+
+
+def main(args):
     all_probes = init_probes()
-    print(f"using probes: {all_probes}\n")
 
-    # this should be a flag, normal mode of operation should
-    # be to wait until all idle probes return true and then
-    # execute the shell comamnd and exit
-    test(all_probes, verbose=True)
+    if args.list:
+        print("All Probes:")
+        for p in all_probes:
+            print(f" * {p.__name__}")
+        return
 
+    verbose(f"using probes: {all_probes}\n")
+
+    if args.test:
+        global VERBOSE  # :(
+        VERBOSE = True
+        test(all_probes)
+        return
+
+    start = datetime.datetime.now()
+
+    print(f"onidle starting at {start.ctime()} with command '{' '.join(args.command)}'")
+
+    # XXX refactor
+    # XXX this should short-circuit?
+    while True:
+        verbose(f"check at {datetime.datetime.now()}")
+        results = [probe() for probe in all_probes]
+        verbose(results)
+        verbose()
+        if all(x != False for x in results):
+            now = datetime.datetime.now()
+            print(f"running command at {now.ctime()} after {now-start}")
+            run_command(args.command)
+            return
+
+        time.sleep(60)
+
+
+VERBOSE = False
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--test", action="store_true", help="probe for idle state in a loop"
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="list criteria used to determine idle"
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="print debugging output"
+    )
+    parser.add_argument(
+        "command", nargs="*", help="command to execute when system is idle"
+    )
+
+    args = parser.parse_args()
+
+    if not args.list and not args.test:
+        if len(args.command) == 0:
+            print("error: the following arguments are required: command")
+            parser.print_usage()
+            sys.exit(1)
+
+    if args.verbose:
+        VERBOSE = True
+
+    main(args)
