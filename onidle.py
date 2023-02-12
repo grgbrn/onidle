@@ -17,6 +17,7 @@
 
 import datetime
 import functools
+import os
 import subprocess
 import sys
 import time
@@ -83,30 +84,21 @@ def proc_uptime():
 
 
 def proc_loadavg():
-    # /proc/loadavg
     # https://stackoverflow.com/questions/11987495/what-do-the-numbers-in-proc-loadavg-mean-on-linux
     # https://www.brendangregg.com/blog/2017-08-08/linux-load-averages.html
 
-    cpu_count = get_cpu_count()
+    cpu_count = os.cpu_count()
+    load = os.getloadavg()
 
-    with open("/proc/loadavg", "r") as f:
-        dat = lines(f.read())
-        assert len(dat) == 1
-        values = dat[0].split()
+    current_load = load[0]
+    half_cpu_count = int(cpu_count / 2)
 
-        current_load = float(values[0])
+    verbose(
+        f"system load: {current_load} cpu count:{cpu_count} (threshold:{half_cpu_count})"
+    )
 
-        # XXX can we use this?
-        # tmp = values[3].split("/")
-        # executing_count = int(tmp[0])
-
-        half_cpu_count = int(cpu_count / 2)
-        verbose(
-            f"system load: {current_load} cpu count:{cpu_count} (threshold:{half_cpu_count})"
-        )
-
-        # heuristic: load is less than half cpu/core count
-        return current_load < half_cpu_count
+    # heuristic: load is less than half cpu/core count
+    return current_load < half_cpu_count
 
 
 def idle_terminal():
@@ -183,18 +175,6 @@ def lines(stdout):
     return stdout.strip().split("\n")
 
 
-@functools.cache  # aka memoize
-def get_cpu_count():
-    "returns number of cpu cores on this system"
-    # https://unix.stackexchange.com/questions/218074/how-to-know-number-of-cores-of-a-system-in-linux
-    r = subprocess.run(
-        ["nproc", "--all"], capture_output=True, encoding="utf8", check=True
-    )
-    dat = lines(r.stdout)
-    assert len(dat) == 1
-    return int(dat[0])
-
-
 @functools.cache
 def which(binary_name):
     "return the full path of binary_name, or None if it is not present"
@@ -266,7 +246,10 @@ def main(args):
 
     start = datetime.datetime.now()
 
-    print(f"onidle starting at {start.ctime()} with command '{' '.join(args.command)}'")
+    print(
+        f"onidle starting at {start.ctime()} with command '{' '.join(args.command)}'",
+        flush=True,
+    )
 
     # XXX refactor
     # XXX this should short-circuit?
@@ -277,7 +260,7 @@ def main(args):
         verbose()
         if all(x != False for x in results):
             now = datetime.datetime.now()
-            print(f"running command at {now.ctime()} after {now-start}")
+            print(f"running command at {now.ctime()} after {now-start}", flush=True)
             run_command(args.command)
             return
 
