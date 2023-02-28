@@ -127,6 +127,9 @@ def idle_terminal():
     # i am the walrus koo koo cachoo
     tmp = [val for x in idle_times if (val := parse(x)) is not None]
 
+    if len(tmp) == 0:
+        return
+
     idle_minutes = min(tmp)
     verbose(f"terminal idle for {idle_minutes} min")
 
@@ -251,11 +254,19 @@ def main(args):
         flush=True,
     )
 
+    def run_probe(probe):
+        try:
+            return probe()
+        except Exception as e:
+            print(f"Unhandled exception in {probe}", flush=True)
+            print(e, flush=True)
+            return None  # treat this as unsure
+
     # XXX refactor
     # XXX this should short-circuit?
     while True:
         verbose(f"check at {datetime.datetime.now()}")
-        results = [probe() for probe in all_probes]
+        results = [run_probe(p) for p in all_probes]
         verbose(results)
         verbose()
         if all(x != False for x in results):
